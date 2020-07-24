@@ -34,6 +34,7 @@
 
 ;;;; TODO
 ;; - Ensure all error responses are entirely under {:nippy/_ <...>} key?
+;;;  Would be a nice change, but breaking.
 ;; - Performance would benefit from ^:static support / direct linking / etc.
 ;; - Ability to compile out metadata support?
 ;; - Auto cache keywords? When map keys? Configurable? Per-map
@@ -110,14 +111,13 @@
    47  :reader-sm
    51  :reader-md
    52  :reader-lg
-   5   :reader-lg2 ; == :reader-lg, used only for back-compatible thawing
 
-   75  :serializable-sm
-   76  :serializable-md
+   75  :serializable-q-sm ; Quarantined
+   76  :serializable-q-md ; ''
 
    48  :record-sm
    49  :record-md
-   80  :record-lg ; Used only for back-compatible thawing
+   80  :record-lg ; Unrealistic, future removal candidate
 
    81  :type
 
@@ -132,10 +132,12 @@
    13  :str-lg
 
    106 :kw-sm
-   14  :kw-lg
+   77  :kw-md
+   14  :kw-lg ; Unrealistic, future removal candidate
 
    56  :sym-sm
-   57  :sym-lg
+   78  :sym-md
+   57  :sym-lg ; Unrealistic, future removal candidate
 
    58  :regex
    71  :uri
@@ -213,17 +215,18 @@
    68  :cached-md
 
    ;;; DEPRECATED (only support thawing)
-   1   :reader-depr1          ; v0.9.2+ for +64k support
+   5   :reader-lg2 ; == :reader-lg, used only for back-compatible thawing
+   1   :reader-depr1          ; v0.9.2 for +64k support
    11  :str-depr1             ; ''
-   22  :map-depr1             ; v0.9.0+ for more efficient thaw
-   12  :kw-depr1              ; v2.0.0-alpha5+ for str consistecy
-   27  :map-depr2             ; v2.11+ for count/2
+   22  :map-depr1             ; v0.9.0 for more efficient thaw
+   12  :kw-depr1              ; v2.0.0-alpha5 for str consistecy
+   27  :map-depr2             ; v2.11 for count/2
    29  :sorted-map-depr1      ; ''
-   4   :boolean-depr1         ; v2.12+ for switch to true/false ids
+   4   :boolean-depr1         ; v2.12 for switch to true/false ids
 
-   46  :serializable-sm-depr1 ; v2.14.1+ for quarantined object bas
-   50  :serializable-md-depr1 ; ''
-   6   :serializable-lg-depr1 ; ''
+   46  :serializable-uq-sm ; Unquarantined
+   50  :serializable-uq-md ; ''
+   6   :serializable-uq-lg ; ''; unrealistic, future removal candidate
    })
 
 (comment
@@ -372,38 +375,6 @@
 
 ;;;; Freezing
 
-#_(do
-  (defmacro write-id [out id] `(.writeByte ~out ~id))
-
-  (defmacro ^:private sm-count? [n] `(<= ~n 255))   #_(- Byte/MAX_VALUE  Byte/MIN_VALUE)
-  (defmacro ^:private md-count? [n] `(<= ~n 65535)) #_(- Short/MAX_VALUE Short/MIN_VALUE)
-
-  (defmacro ^:private write-sm-count [out n]
-    `(if (<= ~n 127)
-       (.writeByte ~out ~n)
-       (.writeByte ~out (unchecked-subtract 127 ~n))))
-
-  (defmacro ^:private write-md-count [out n]
-    `(if (<= ~n 32767)
-       (.writeShort ~out ~n)
-       (.writeShort ~out (unchecked-subtract 32767 ~n))))
-
-  (defmacro ^:private write-lg-count [out n] `(.writeInt ~out ~n))
-
-  (defmacro ^:private read-sm-count [in]
-    `(let [n# (.readByte ~in)]
-       (if (pos? n#)
-         n#
-         (unchecked-subtract 127 n#))))
-
-  (defmacro ^:private read-md-count [in]
-    `(let [n# (.readShort ~in)]
-       (if (pos? n#)
-         n#
-         (unchecked-subtract 32767 n#))))
-
-  (defmacro ^:private read-lg-count [in] `(.readInt ~in)))
-
 (do
   (defmacro write-id [out id] `(.writeByte ~out ~id))
 
@@ -430,13 +401,8 @@
         (-freeze-without-meta! m data-output)))
     (-freeze-without-meta!     x data-output))
 
-  nil
-  (-freeze-with-meta! [x data-output]
-    (-freeze-without-meta! x data-output))
-
-  Object
-  (-freeze-with-meta! [x data-output]
-    (-freeze-without-meta! x data-output)))
+  nil    (-freeze-with-meta! [x data-output] (-freeze-without-meta! x data-output))
+  Object (-freeze-with-meta! [x data-output] (-freeze-without-meta! x data-output)))
 
 (defn- write-bytes-sm [^DataOutput out ^bytes ba]
   (let [len (alength ba)]
@@ -475,11 +441,6 @@
 
         (.write out ba 0 len)))))
 
-;; (defn- str->bytes [s] (.getBytes s charset))
-(defn- write-utf8-sm    [out ^String s]     (write-bytes-sm out (.getBytes s charset)))
-(defn- write-utf8-md    [out ^String s]     (write-bytes-md out (.getBytes s charset)))
-(defn- write-utf8-lg    [out ^String s]     (write-bytes-lg out (.getBytes s charset)))
-(defn- write-utf8       [out ^String s]     (write-bytes    out (.getBytes s charset)))
 (defn- write-biginteger [out ^BigInteger n] (write-bytes-lg out (.toByteArray n)))
 
 (defn- write-str [^DataOutput out ^String s]
@@ -511,9 +472,15 @@
       (do (write-id       out id-kw-sm)
           (write-sm-count out len))
 
-      :else ; Rare!
-      (do (write-id       out id-kw-lg)
-          (write-lg-count out len)))
+      (md-count? len)
+      (do (write-id       out id-kw-md)
+          (write-lg-count out len))
+
+      ;; :else ; Unrealistic
+      ;; (do (write-id       out id-kw-lg)
+      ;;     (write-lg-count out len))
+
+      :else (throw (ex-info "Keyword too long" {:full-name s})))
 
     (.write out ba 0 len)))
 
@@ -526,9 +493,15 @@
       (do (write-id       out id-sym-sm)
           (write-sm-count out len))
 
-      :else ; Rare!
-      (do (write-id       out id-sym-lg)
-          (write-lg-count out len)))
+      (md-count? len)
+      (do (write-id       out id-sym-md)
+          (write-lg-count out len))
+
+      ;; :else ; Unrealistic
+      ;; (do (write-id       out id-sym-lg)
+      ;;     (write-lg-count out len))
+
+      :else (throw (ex-info "Symbol too long" {:full-name s})))
 
     (.write out ba 0 len)))
 
@@ -772,14 +745,21 @@
 
     (cond*
       (sm-count? len)
-      (do (write-id       out id-serializable-sm)
+      (do (write-id       out id-serializable-q-sm)
           (write-bytes-sm out class-name-ba))
 
-      ;; Note no :serializable-lg freeze support (unrealistic name length)
+      (md-count? len)
+      (do (write-id       out id-serializable-q-md)
+          (write-bytes-md out class-name-ba))
+
+      ;; :else ; Unrealistic
+      ;; (do (write-id       out id-serializable-q-lg)
+      ;;     (write-bytes-md out class-name-ba))
 
       :else
-      (do (write-id       out id-serializable-md)
-          (write-bytes-md out class-name-ba)))
+      (throw
+        (ex-info "Serializable class name too long"
+          {:class-name class-name})))
 
     ;; Legacy: write object directly to out.
     ;; (.writeObject (ObjectOutputStream. out) x)
@@ -1014,19 +994,26 @@
 (freezer LazySeq              (write-uncounted-coll out  id-seq-0  id-seq-sm  id-seq-md  id-seq-lg x))
 (freezer ISeq                 (write-coll           out  id-seq-0  id-seq-sm  id-seq-md  id-seq-lg x))
 (freezer IRecord
-  (let [cname    (.getName (class x)) ; Reflect
-        cname-ba (.getBytes cname charset)
-        len      (alength cname-ba)]
+  (let [class-name    (.getName (class x)) ; Reflect
+        class-name-ba (.getBytes class-name charset)
+        len           (alength   class-name-ba)]
     (cond*
       (sm-count? len)
       (do (write-id       out id-record-sm)
-          (write-bytes-sm out cname-ba))
+          (write-bytes-sm out class-name-ba))
 
-      ;; Note no :record-lg freeze support (unrealistic)
+      (md-count? len)
+      (do (write-id       out id-record-md)
+          (write-bytes-md out class-name-ba))
+
+      ;; :else ; Unrealistic
+      ;; (do (write-id       out id-record-lg)
+      ;;     (write-bytes-md out class-name-ba))
 
       :else
-      (do (write-id       out id-record-md)
-          (write-bytes-md out cname-ba)))
+      (throw
+        (ex-info "Record class name too long"
+          {:class-name class-name})))
 
     (-freeze-without-meta! (into {} x) out)))
 
@@ -1138,14 +1125,14 @@
 
        (let [;; Intentionally undocumented:
              no-header? (or (get opts :no-header?)
-                          (get opts :skip-header?))
+                            (get opts :skip-header?))
              encryptor  (when password encryptor)
              baos (ByteArrayOutputStream. 64)
              dos  (DataOutputStream. baos)]
 
          (if (and (nil? compressor) (nil? encryptor))
-           (do                           ; Optimized case
-             (when-not no-header?        ; Avoid `wrap-header`'s array copy:
+           (do ; Optimized case
+             (when-not no-header? ; Avoid `wrap-header`'s array copy:
                (let [head-ba (get-head-ba {:compressor-id nil :encryptor-id nil})]
                  (.write dos head-ba 0 4)))
              (with-cache (-freeze-with-meta! x dos))
@@ -1166,8 +1153,8 @@
                          (when (> (alength ba) 8192) lz4-compressor)))
 
                      (if (fn? compressor)
-                       (compressor ba)   ; Assume compressor selector fn
-                       compressor        ; Assume compressor
+                       (compressor ba) ; Assume compressor selector fn
+                       compressor      ; Assume compressor
                        ))
 
                    ba (if compressor (compress compressor         ba) ba)
@@ -1203,10 +1190,10 @@
     id-bytes-md (read-bytes in (read-md-count in))
     id-bytes-lg (read-bytes in (read-lg-count in)))))
 
-(defn- read-utf8-sm [^DataInput in] (String. ^bytes (read-bytes in (read-sm-count in)) charset))
-(defn- read-utf8-md [^DataInput in] (String. ^bytes (read-bytes in (read-md-count in)) charset))
-(defn- read-utf8-lg [^DataInput in] (String. ^bytes (read-bytes in (read-lg-count in)) charset))
-(defn- read-utf8
+(defn- read-str-sm [^DataInput in] (String. ^bytes (read-bytes in (read-sm-count in)) charset))
+(defn- read-str-md [^DataInput in] (String. ^bytes (read-bytes in (read-md-count in)) charset))
+(defn- read-str-lg [^DataInput in] (String. ^bytes (read-bytes in (read-lg-count in)) charset))
+(defn- read-str
   ([^DataInput in len] (String. ^bytes (read-bytes in len) charset))
   ([^DataInput in    ]
    (enc/case-eval (.readByte in)
@@ -1290,7 +1277,10 @@
        {:class-name class-name :content nil
         :serializable-whitelist-pass? true}})))
 
-(defn- read-serializable [^DataInput in class-name]
+(defn- read-serializable-q
+  "Quarantined => object serialized to ba, then ba written to output stream.
+  Has length prefix => can skip `readObject` in event of whitelist failure."
+  [^DataInput in class-name]
   (let [quarantined-ba (read-bytes in)]
     (if (*serializable-whitelist* class-name)
       (read-object (DataInputStream. (ByteArrayInputStream. quarantined-ba)) class-name)
@@ -1299,7 +1289,10 @@
        {:class-name class-name :content quarantined-ba
         :serializable-whitelist-pass? false}})))
 
-(defn- read-serializable-depr1 [^DataInput in class-name]
+(defn- read-serializable-uq
+  "Unquarantined => object serialized directly to output stream.
+  No length prefix => cannot skip `readObject` in event of whitelist failure."
+  [^DataInput in class-name]
   (if (*serializable-whitelist* class-name)
     (read-object in class-name)
     (throw ; No way to skip bytes, so best we can do is throw
@@ -1353,15 +1346,20 @@
     (try
       (enc/case-eval type-id
 
-        id-reader-sm       (read-edn             (read-utf8 in (read-sm-count in)))
-        id-reader-md       (read-edn             (read-utf8 in (read-md-count in)))
-        id-reader-lg       (read-edn             (read-utf8 in (read-lg-count in)))
-        id-reader-lg2      (read-edn             (read-utf8 in (read-lg-count in)))
-        id-serializable-sm (read-serializable in (read-utf8 in (read-sm-count in)))
-        id-serializable-md (read-serializable in (read-utf8 in (read-md-count in)))
-        id-record-sm       (read-record       in (read-utf8 in (read-sm-count in)))
-        id-record-md       (read-record       in (read-utf8 in (read-md-count in)))
-        id-record-lg       (read-record       in (read-utf8 in (read-lg-count in)))
+        id-reader-sm       (read-edn             (read-str in (read-sm-count in)))
+        id-reader-md       (read-edn             (read-str in (read-md-count in)))
+        id-reader-lg       (read-edn             (read-str in (read-lg-count in)))
+        id-reader-lg2      (read-edn             (read-str in (read-lg-count in)))
+        id-record-sm       (read-record       in (read-str in (read-sm-count in)))
+        id-record-md       (read-record       in (read-str in (read-md-count in)))
+        id-record-lg       (read-record       in (read-str in (read-lg-count in)))
+
+        id-serializable-q-sm  (read-serializable-q  in (read-str in (read-sm-count in)))
+        id-serializable-q-md  (read-serializable-q  in (read-str in (read-md-count in)))
+
+        id-serializable-uq-sm (read-serializable-uq in (read-str in (read-sm-count in)))
+        id-serializable-uq-md (read-serializable-uq in (read-str in (read-md-count in)))
+        id-serializable-uq-lg (read-serializable-uq in (read-str in (read-lg-count in)))
 
         id-type        (read-type in (thaw-from-in! in))
 
@@ -1391,13 +1389,17 @@
         id-objects-lg  (read-objects (object-array (read-lg-count in)) in)
 
         id-str-0       ""
-        id-str-sm               (read-utf8 in (read-sm-count in))
-        id-str-md               (read-utf8 in (read-md-count in))
-        id-str-lg               (read-utf8 in (read-lg-count in))
-        id-kw-sm       (keyword (read-utf8 in (read-sm-count in)))
-        id-kw-lg       (keyword (read-utf8 in (read-lg-count in)))
-        id-sym-sm      (symbol  (read-utf8 in (read-sm-count in)))
-        id-sym-lg      (symbol  (read-utf8 in (read-lg-count in)))
+        id-str-sm               (read-str in (read-sm-count in))
+        id-str-md               (read-str in (read-md-count in))
+        id-str-lg               (read-str in (read-lg-count in))
+
+        id-kw-sm       (keyword (read-str in (read-sm-count in)))
+        id-kw-md       (keyword (read-str in (read-md-count in)))
+        id-kw-lg       (keyword (read-str in (read-lg-count in)))
+
+        id-sym-sm      (symbol  (read-str in (read-sm-count in)))
+        id-sym-md      (symbol  (read-str in (read-md-count in)))
+        id-sym-lg      (symbol  (read-str in (read-lg-count in)))
         id-regex       (re-pattern (thaw-from-in! in))
 
         id-vec-0       []
@@ -1466,10 +1468,6 @@
         id-map-depr1        (apply hash-map
                               (enc/repeatedly-into [] (* 2 (.readInt in))
                                 (fn [] (thaw-from-in! in))))
-
-        id-serializable-sm-depr1 (read-serializable-depr1 in (read-utf8 in (read-sm-count in)))
-        id-serializable-md-depr1 (read-serializable-depr1 in (read-utf8 in (read-md-count in)))
-        id-serializable-lg-depr1 (read-serializable-depr1 in (read-utf8 in (read-lg-count in)))
         ;; -----------------------------------------------------------------
 
         id-prefixed-custom (read-custom! in :prefixed (.readShort in))
