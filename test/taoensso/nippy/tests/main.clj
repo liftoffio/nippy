@@ -275,6 +275,41 @@
 
     "Can freeze and thaw Serializable object if approved by whitelist"))
 
+
+;;;; Metadata
+
+(deftest _metadata
+
+  (is
+    (:has-meta?
+     (meta
+       (nippy/thaw
+         (nippy/freeze (with-meta [] {:has-meta? true}) {:incl-metadata? true})
+         {:incl-metadata? true}
+         )))
+
+    "Metadata successfully included")
+
+  (is
+    (nil?
+      (meta
+        (nippy/thaw
+          (nippy/freeze (with-meta [] {:has-meta? true}) {:incl-metadata? true})
+          {:incl-metadata? false}
+          )))
+
+    "Metadata successfully excluded by thaw")
+
+  (is
+    (nil?
+      (meta
+        (nippy/thaw
+          (nippy/freeze (with-meta [] {:has-meta? true}) {:incl-metadata? false})
+          {:incl-metadata? true}
+          )))
+
+    "Metadata successfully excluded by freeze"))
+
 ;;;; Benchmarks
 
 (deftest _benchmarks

@@ -282,6 +282,8 @@
   nil => default"
   nil)
 
+(enc/defonce ^:dynamic *incl-metadata?* "Include metadata when freezing/thawing?" true)
+
 (enc/defonce ^:dynamic *serializable-whitelist*
   "Used when attempting to freeze or thaw an object that:
     - Does not implement Nippy's Freezable    protocol.
@@ -395,7 +397,7 @@
 (extend-protocol IFreezable2 ; Must be a separate protocol
   clojure.lang.IMeta
   (-freeze-with-meta! [x ^DataOutput data-output]
-    (let [m (.meta x)]
+    (let [m (when *incl-metadata?* (.meta x))]
       (when m
         (write-id data-output id-meta)
         (-freeze-without-meta! m data-output)))
@@ -1084,7 +1086,8 @@
             (opt->bindings :freeze-fallback        #'*freeze-fallback*)
             (opt->bindings :auto-freeze-compressor #'*auto-freeze-compressor*)
             (opt->bindings :serializable-whitelist #'*serializable-whitelist*)
-            (opt->bindings :custom-readers         #'*custom-readers*))]
+            (opt->bindings :custom-readers         #'*custom-readers*)
+            (opt->bindings :incl-metadata?         #'*incl-metadata?*))]
 
       (if-not bindings
         (f) ; Common case
@@ -1121,7 +1124,7 @@
   types, extend the Clojure reader or see `extend-freeze`."
   ([x] (freeze x nil))
   ([x {:as   opts
-       :keys [compressor encryptor password serializable-whitelist]
+       :keys [compressor encryptor password serializable-whitelist incl-metadata?]
        :or   {compressor :auto
               encryptor  aes128-gcm-encryptor}}]
 
@@ -1373,7 +1376,9 @@
         id-false       false
         id-char        (.readChar in)
         id-meta        (let [m (thaw-from-in! in)]
-                         (with-meta (thaw-from-in! in) m))
+                         (if *incl-metadata?*
+                           (with-meta (thaw-from-in! in) m)
+                           (do        (thaw-from-in! in))))
 
         id-cached-0    (thaw-cached 0 in)
         id-cached-1    (thaw-cached 1 in)
@@ -1558,7 +1563,7 @@
   ([^bytes ba
     {:as   opts
      :keys [v1-compatibility? compressor encryptor password
-            serializable-whitelist]
+            serializable-whitelist incl-metadata?]
      :or   {compressor :auto
             encryptor  :auto}}]
 
