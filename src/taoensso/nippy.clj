@@ -284,6 +284,7 @@
 
 (enc/defonce ^:dynamic *incl-metadata?* "Include metadata when freezing/thawing?" true)
 
+(def ^:private     base-serializable-whitelist #{"[I" "[F" "[Z" "[B" "[C" "[D" "[S" "[J"})
 (enc/defonce ^:dynamic *serializable-whitelist*
   "Used when attempting to freeze or thaw an object that:
     - Does not implement Nippy's Freezable    protocol.
@@ -326,7 +327,8 @@
           will whitelist everything, allowing Serializable for ANY class.
 
   Default value for v2.14.2 is: `(constantly true)`.
-  Default value for v2.15.0 is: `#{}`.
+  Default value for v2.15.1 contains a number of known-safe classes
+  (please see value for details).
 
   Upgrading from an older version of Nippy and not sure whether you've
   been using Nippy's Serializable support? Here's a code snippet that
@@ -358,7 +360,10 @@
 
   [1] https://groups.google.com/forum/#!msg/clojure/WaL3hHzsevI/7zHU-L7LBQAJ"
 
-  #{#_"java.lang.Throwable"})
+  (into base-serializable-whitelist
+    #{"java.lang.Throwable" "java.lang.Exception" "clojure.lang.ExceptionInfo"}))
+
+(comment (.getName (.getSuperclass (.getClass (java.util.concurrent.TimeoutException.)))))
 
 (defn set-freeze-fallback!        [x] (alter-var-root #'*freeze-fallback*        (constantly x)))
 (defn set-auto-freeze-compressor! [x] (alter-var-root #'*auto-freeze-compressor* (constantly x)))
