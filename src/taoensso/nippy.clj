@@ -320,7 +320,22 @@
           source, you can use `(constantly true)` as predicate. This
           will whitelist everything, allowing Serializable for ANY class.
 
-  Default value as of v2.15.0 is: #{}.
+  Default value for v2.14.2 is: `(constantly true)`.
+  Default value for v2.15.0 is: `#{}`.
+
+  Upgrading from an older version of Nippy and not sure whether you've
+  been using Nippy's Serializable support? Here's a code snippet that
+  will allow AND RECORD any class using Nippy's Serializable fallback:
+
+    ;; Deref for set of all class names that made use of Nippy's Serializable support:
+    (defonce observed-serializables_ (atom #{}))
+
+    (swap-serializable-whitelist!
+      (fn [_]
+        (fn allow-class? [class-name]
+          (swap! observed-serializables_ conj class-name) ; Record class name
+          true ; Allow any class
+          )))
 
   PRs welcome for additional known-safe classes to be added to default
   whitelist.
