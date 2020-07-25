@@ -1068,6 +1068,37 @@
 (comment (wrap-header (.getBytes "foo") {:compressor-id :lz4
                                          :encryptor-id  nil}))
 
+(defn- call-with-bindings
+  "Allow opts to override config bindings."
+  [opts f]
+  (if (empty? opts)
+    (f)
+    (let [opt->bindings
+          (fn [bindings id var]
+            (if-let [o (find opts id)]
+              (assoc bindings var (val o))
+              (do    bindings)))
+
+          bindings
+          (-> nil
+            (opt->bindings :freeze-fallback        #'*freeze-fallback*)
+            (opt->bindings :auto-freeze-compressor #'*auto-freeze-compressor*)
+            (opt->bindings :serializable-whitelist #'*serializable-whitelist*)
+            (opt->bindings :custom-readers         #'*custom-readers*))]
+
+      (if-not bindings
+        (f) ; Common case
+        (try
+          (push-thread-bindings bindings)
+          (f)
+          (finally
+            (pop-thread-bindings)))))))
+
+(comment
+  (enc/qb 1e4
+    (call-with-bindings {}                       (fn [] *freeze-fallback*))
+    (call-with-bindings {:freeze-fallback "foo"} (fn [] *freeze-fallback*))))
+
 (defn fast-freeze
   "Like `freeze` but:
     - Writes data without a Nippy header
@@ -1076,47 +1107,21 @@
 
   Equivalent to (but a little faster than):
     `(freeze x {:compressor nil :encryptor nil :no-header? true})"
-  [x]
-  (let [baos (ByteArrayOutputStream. 64)
-        dos  (DataOutputStream. baos)]
-    (with-cache (-freeze-with-meta! x dos))
-    (.toByteArray baos)))
-
-(defn- call-with-bindings
-  "Allow opts to override config bindings. Undocumented."
-  [opts f]
-  (let [opt->bindings
-        (fn [bindings id var]
-          (if-let [o (find opts id)]
-            (assoc bindings var (val o))
-            (do    bindings)))
-
-        bindings
-        (-> nil
-          (opt->bindings :freeze-fallback        #'*freeze-fallback*)
-          (opt->bindings :auto-freeze-compressor #'*auto-freeze-compressor*)
-          (opt->bindings :serializable-whitelist #'*serializable-whitelist*)
-          (opt->bindings :custom-readers         #'*custom-readers*))]
-
-    (if-not bindings
-      (f) ; Common case
-      (try
-        (push-thread-bindings bindings)
-        (f)
-        (finally
-          (pop-thread-bindings))))))
-
-(comment
-  (enc/qb 1e4
-    (call-with-bindings {}                       (fn [] *freeze-fallback*))
-    (call-with-bindings {:freeze-fallback "foo"} (fn [] *freeze-fallback*))))
+  ([x     ] (fast-freeze x nil))
+  ([x opts]
+   (call-with-bindings opts
+     (fn []
+       (let [baos (ByteArrayOutputStream. 64)
+             dos  (DataOutputStream. baos)]
+         (with-cache (-freeze-with-meta! x dos))
+         (.toByteArray baos))))))
 
 (defn freeze
   "Serializes arg (any Clojure data type) to a byte array. To freeze custom
   types, extend the Clojure reader or see `extend-freeze`."
   ([x] (freeze x nil))
   ([x {:as   opts
-       :keys [compressor encryptor password]
+       :keys [compressor encryptor password serializable-whitelist]
        :or   {compressor :auto
               encryptor  aes128-gcm-encryptor}}]
 
@@ -1528,9 +1533,13 @@
 
   Equivalent to (but a little faster than):
     `(thaw x {:compressor nil :encryptor nil :no-header? true})"
-  [^bytes ba]
-  (let [dis (DataInputStream. (ByteArrayInputStream. ba))]
-    (with-cache (thaw-from-in! dis))))
+
+  ([ba            ] (fast-thaw ba nil))
+  ([^bytes ba opts]
+   (call-with-bindings opts
+     (fn []
+       (let [dis (DataInputStream. (ByteArrayInputStream. ba))]
+         (with-cache (thaw-from-in! dis)))))))
 
 (defn thaw
   "Deserializes a frozen Nippy byte array to its original Clojure data type.
@@ -1548,7 +1557,8 @@
   ([ba] (thaw ba nil))
   ([^bytes ba
     {:as   opts
-     :keys [v1-compatibility? compressor encryptor password]
+     :keys [v1-compatibility? compressor encryptor password
+            serializable-whitelist]
      :or   {compressor :auto
             encryptor  :auto}}]
 
